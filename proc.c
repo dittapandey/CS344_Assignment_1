@@ -392,18 +392,19 @@ int
 thread_join(void)
 {
   struct proc *p;
-  int havekids, pid;
+  int havechild, pid;
   struct proc *curproc = myproc();
 
   acquire(&ptable.lock);
-  while(true){
+  while(1){
     // Scan through table looking for exited children.
-    havekids = 0;
+    havechild = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != curproc)
+      if(p->parent != curproc || p->pgdir != curproc->pgdir) // waiting for only threads and not forked processes to end
       {
         continue;
-      havekids = 1;
+      }
+      havechild = 1;
       if(p->state == ZOMBIE){
         // Found one.
         pid = p->pid;
@@ -421,7 +422,7 @@ thread_join(void)
     }
 
     // No point waiting if we don't have any children.
-    if(!havekids || curproc->killed){
+    if(!havechild || curproc->killed){
       release(&ptable.lock);
       return -1;
     }
@@ -430,6 +431,7 @@ thread_join(void)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
   }
 }
+
 
 void
 thread_exit(void)
