@@ -311,6 +311,168 @@ wait(void)
   }
 }
 
+int
+thread_create(void(*fcn)(void*), void* arg, void* stack)
+{
+  // how to pass argument in
+  int i, pid;
+  struct proc *np;
+  struct proc *curproc = myproc();
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // Copy process state from proc.
+  /*
+  if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
+    kfree(np->kstack);
+    np->kstack = 0;
+    np->state = UNUSED;
+    return -1;
+  }
+  */
+
+  // this portion is particularly different
+  // alloting the page directory
+  np->pgdir = curproc->pgdir;
+  // alloting size of current process address space
+  np->sz = curproc->sz;
+  np->parent = curproc;
+  *np->tf = *curproc->tf;
+
+  // setting the instruction pointer to the addresss the passed function fcn
+  np->tf->eax = 0;
+  np->tf->eip = (uint)fcn;
+  // pointing the stack pointer to the end of the page alloted to it
+  np->tf->esp = (uint)stack+4096;
+
+  // similar to the fork function the child thread process also returns 0 to the parent thread/ process
+  np->tf->eax = 0;
+  // defining pop operation by traversing the memory
+  np->tf->esp -= 4;
+  *(uint*)(np->tf->esp) = (uint)(arg);
+
+  while(np->sz != curproc->sz)
+  {
+      np->tf->esp -= 4;
+    *(uint*)(np->tf->esp) = (uint)(arg);
+      np->sz = curproc->sz;
+    np->parent = curproc;
+    *np->tf = *curproc->tf;
+    if(!wait()) break;
+  }
+
+  // giuving a fake return address tp the function
+  np->tf->esp -= 4;
+  *(uint*)(np->tf->esp) = (uint)0xFFFFFFF;
+
+
+  for(i = 0; i < NOFILE; i++)
+    if(curproc->ofile[i])
+      np->ofile[i] = filedup(curproc->ofile[i]);
+  np->cwd = idup(curproc->cwd);
+
+  safestrcpy(np->name, curproc->name, sizeof(curproc->name));
+
+  pid = np->pid;
+
+  acquire(&ptable.lock);
+
+  np->state = RUNNABLE;
+
+  release(&ptable.lock);
+
+  return pid;
+
+}
+
+int
+thread_join(void)
+{
+  struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+
+  acquire(&ptable.lock);
+  while(true){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+      {
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one.
+        pid = p->pid;
+        kfree(p->kstack);
+        p->kstack = 0;
+        //freevm(p->pgdir);
+        p->parent = 0;
+        p->pid = 0;
+        p->state = UNUSED;
+        p->name[0] = 0;
+        p->killed = 0;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || curproc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children toexit.  (See wakeup1 call in proc_exit.)
+    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+  }
+}
+
+void
+thread_exit(void)
+{
+  struct proc *curproc = myproc();
+  struct proc *p;
+  int fd;
+
+  if(curproc == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(fd = 0; fd < NOFILE; fd++){
+    if(curproc->ofile[fd]){
+      fileclose(curproc->ofile[fd]);
+      curproc->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  iput(curproc->cwd);
+  end_op();
+  curproc->cwd = 0;
+
+  acquire(&ptable.lock);
+
+  // Parent might be sleeping in wait().
+  wakeup1(curproc->parent);
+
+  // Pass abandoned children to init.
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->parent == curproc){
+      p->parent = initproc;
+      if(p->state == ZOMBIE)
+        wakeup1(initproc);
+    }
+  }
+
+  // Jump into the scheduler, never to return.
+  curproc->state = ZOMBIE;
+  sched();
+  panic("zombie exit");
+}
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.

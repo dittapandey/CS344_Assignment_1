@@ -104,3 +104,27 @@ sys_draw(void* buff,int size){
   buf[i] = wolf[i];
   return n;
 }
+
+int
+sys_thread_create(void){
+  int fcn;
+  char* arg;
+  char* stack;
+  if(argint(0, &fcn) < 0) return -1;
+  if(argint(1, (int*)&arg) < 0) return -1; //changed
+  if(argint(2, (int*)&stack)<0) return -1; //changed
+  
+  return thread_create((void(*)(void*))fcn, arg, stack);
+}
+
+
+int sys_thread_join(void)
+{
+  int ret_val = thread_join();
+  return ret_val;
+}
+
+int sys_thread_exit(void){
+  thread_exit();
+  return 0;
+}
